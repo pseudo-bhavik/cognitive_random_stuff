@@ -1,0 +1,389 @@
+V2 with gsr value 
+
+# app.py
+from flask import Flask, render_template, Response, jsonify, request, redirect, url_for, session
+import cv2
+import mediapipe as mp
+import math
+
+app = Flask(__name__)
+app.secret_key = 'pbl_academic_key_2026'
+
+# --- CONFIGURATION ---
+CAMERA_INDEX = 0  
+EAR_THRESHOLD = 0.25  
+CONSECUTIVE_FRAMES = 1  
+MIN_OPEN_FRAMES_AFTER_BLINK = 3
+
+# Global Variable for the Toggle Switch
+show_mesh = False
+
+# --- Global Metrics Dictionary ---
+system_metrics = {
+    "ear": 0.00,
+    "mar": 0.00,
+    "moe": 0.00,
+    "blinks": 0,
+    "status": "INITIALIZING...",
+    "gsr": "OFFLINE", 
+    "hrv": "OFFLINE"  
+}
+
+LEFT_EYE = [362, 385, 387, 263, 373, 380]
+RIGHT_EYE = [33, 160, 158, 133, 153, 144]
+INNER_LIPS = [78, 82, 13, 312, 308, 317, 14, 87]
+
+def euclidean_distance(p1, p2):
+    return math.dist([p1.x, p1.y], [p2.x, p2.y])
+
+def calculate_ear(landmarks, eye_indices):
+    p1, p2, p3 = landmarks[eye_indices[0]], landmarks[eye_indices[1]], landmarks[eye_indices[2]]
+    p4, p5, p6 = landmarks[eye_indices[3]], landmarks[eye_indices[4]], landmarks[eye_indices[5]]
+    v1 = euclidean_distance(p2, p6)
+    v2 = euclidean_distance(p3, p5)
+    h1 = euclidean_distance(p1, p4)
+    return (v1 + v2) / (2.0 * h1)
+
+def calculate_mar(landmarks, indices):
+    v1 = euclidean_distance(landmarks[indices[1]], landmarks[indices[7]])
+    v2 = euclidean_distance(landmarks[indices[2]], landmarks[indices[6]])
+    v3 = euclidean_distance(landmarks[indices[3]], landmarks[indices[5]])
+    h1 = euclidean_distance(landmarks[indices[0]], landmarks[indices[4]])
+    return (v1 + v2 + v3) / (2.0 * h1)
+
+def generate_frames():
+    global system_metrics, show_mesh
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    
+    eye_closed_frames = 0
+    eye_open_frames = 0
+    blink_pending = False
+    blink_counter = 0
+
+    mp_face_mesh = mp.solutions.face_mesh
+    with mp_face_mesh.FaceMesh(
+        max_num_faces=1,
+        refine_landmarks=True,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    ) as face_mesh:
+        
+        while cap.isOpened():
+            success, frame = cap.read()
+            if not success:
+                break
+                
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = face_mesh.process(frame_rgb)
+            
+            if results.multi_face_landmarks:
+                for face_landmarks in results.multi_face_landmarks:
+                    left_ear = calculate_ear(face_landmarks.landmark, LEFT_EYE)
+                    right_ear = calculate_ear(face_landmarks.landmark, RIGHT_EYE)
+                    avg_ear = (left_ear + right_ear) / 2.0
+                    
+                    if avg_ear < EAR_THRESHOLD:
+                        eye_closed_frames += 1
+                        eye_open_frames = 0
+                        if eye_closed_frames >= CONSECUTIVE_FRAMES:
+                            blink_pending = True
+                    else:
+                        eye_open_frames += 1
+                        eye_closed_frames = 0 
+                        if blink_pending and eye_open_frames >= MIN_OPEN_FRAMES_AFTER_BLINK:
+                            blink_counter += 1
+                            blink_pending = False 
+
+                    mar = calculate_mar(face_landmarks.landmark, INNER_LIPS)
+                    moe = mar / avg_ear if avg_ear > 0.01 else mar / 0.01
+                    
+                    status = "FOCUS / NORMAL"
+                    if moe > 2.5:
+                        status = "FATIGUE DETECTED"
+                    elif avg_ear < EAR_THRESHOLD:
+                        status = "BLINKING"
+
+                    system_metrics["ear"] = round(avg_ear, 2)
+                    system_metrics["mar"] = round(mar, 2)
+                    system_metrics["moe"] = round(moe, 2)
+                    system_metrics["blinks"] = blink_counter
+                    system_metrics["status"] = status
+
+                    # --- DRAW FACE OUTLINE + POINTS ---
+                    if show_mesh:
+                        h, w, _ = frame.shape
+                        
+                        # 1. Draw Face Oval (Outline)
+                        for connection in mp_face_mesh.FACEMESH_FACE_OVAL:
+                            start_idx = connection[0]
+                            end_idx = connection[1]
+                            p1 = face_landmarks.landmark[start_idx]
+                            p2 = face_landmarks.landmark[end_idx]
+                            cv2.line(frame, 
+                                     (int(p1.x * w), int(p1.y * h)), 
+                                     (int(p2.x * w), int(p2.y * h)), 
+                                     (255, 255, 255), 1)
+
+                        # 2. Draw Target Points (Eyes & Lips)
+                        target_indices = LEFT_EYE + RIGHT_EYE + INNER_LIPS
+                        for idx in target_indices:
+                            pt = face_landmarks.landmark[idx]
+                            cx, cy = int(pt.x * w), int(pt.y * h)
+                            cv2.circle(frame, (cx, cy), 3, (255, 255, 255), -1)
+                            cv2.circle(frame, (cx, cy), 4, (0, 0, 0), 1)
+            
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            ret, buffer = cv2.imencode('.jpg', gray_frame)
+            frame_bytes = buffer.tobytes()
+            
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+# --- Routes & Auth ---
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        if request.form['username'] == 'admin' and request.form['password'] == 'admin123':
+            session['logged_in'] = True
+            return redirect(url_for('index'))
+        else:
+            error = "INVALID CREDENTIALS."
+    return render_template('login.html', error=error)
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login'))
+
+@app.route('/')
+def index():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    return render_template('index.html')
+
+@app.route('/video_feed')
+def video_feed():
+    if not session.get('logged_in'):
+        return "UNAUTHORIZED", 401
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/api/metrics')
+def metrics():
+    if not session.get('logged_in'):
+        return jsonify({"error": "UNAUTHORIZED"}), 401
+    return jsonify(system_metrics)
+
+@app.route('/api/toggle_mesh', methods=['POST'])
+def toggle_mesh():
+    if not session.get('logged_in'):
+        return jsonify({"error": "UNAUTHORIZED"}), 401
+    
+    global show_mesh
+    data = request.get_json()
+    show_mesh = data.get('show_mesh', False)
+    return jsonify({"status": "success", "show_mesh": show_mesh})
+
+# --- NEW ROUTE: INCOMING HARDWARE TELEMETRY ---
+@app.route('/api/hardware', methods=['POST'])
+def hardware_update():
+    global system_metrics
+    data = request.get_json()
+    
+    if data and 'gsr' in data:
+        # Update the global dictionary with the live analog reading
+        system_metrics["gsr"] = data['gsr']
+        return jsonify({"status": "success", "message": "GSR Data received"})
+        
+    return jsonify({"status": "error", "message": "Invalid payload"}), 400
+
+if __name__ == '__main__':
+    # host='0.0.0.0' is mandatory so the ESP32 on the local network can hit the API
+    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
+
+
+
+
+
+
+
+
+
+
+
+V1 with basic working 
+
+# app.py
+from flask import Flask, render_template, Response, jsonify, request, redirect, url_for, session
+import cv2
+import mediapipe as mp
+import math
+
+app = Flask(__name__)
+app.secret_key = 'pbl_academic_key_2026'
+
+# --- EXACT CONFIGURATION FROM YOUR SNIPPET ---
+CAMERA_INDEX = 0  
+EAR_THRESHOLD = 0.25  
+CONSECUTIVE_FRAMES = 1
+
+# --- Blink Detection Tuning ---
+# Minimum frames eye must stay OPEN before another blink can register.
+# At 30fps, 4 frames = ~133ms. Prevents double-counting one physical blink.
+MIN_OPEN_FRAMES_AFTER_BLINK = 3
+
+# --- Global Metrics Dictionary ---
+system_metrics = {
+    "ear": 0.00,
+    "mar": 0.00,
+    "moe": 0.00,
+    "blinks": 0,
+    "status": "INITIALIZING...",
+    "gsr": "OFFLINE", 
+    "hrv": "OFFLINE"  
+}
+
+# --- MediaPipe Landmark Indices ---
+LEFT_EYE = [362, 385, 387, 263, 373, 380]
+RIGHT_EYE = [33, 160, 158, 133, 153, 144]
+INNER_LIPS = [78, 82, 13, 312, 308, 317, 14, 87]
+
+def euclidean_distance(p1, p2):
+    return math.dist([p1.x, p1.y], [p2.x, p2.y])
+
+def calculate_ear(landmarks, eye_indices):
+    p1 = landmarks[eye_indices[0]]
+    p2 = landmarks[eye_indices[1]]
+    p3 = landmarks[eye_indices[2]]
+    p4 = landmarks[eye_indices[3]]
+    p5 = landmarks[eye_indices[4]]
+    p6 = landmarks[eye_indices[5]]
+    v1 = euclidean_distance(p2, p6)
+    v2 = euclidean_distance(p3, p5)
+    h1 = euclidean_distance(p1, p4)
+    return (v1 + v2) / (2.0 * h1)
+
+def calculate_mar(landmarks, indices):
+    v1 = euclidean_distance(landmarks[indices[1]], landmarks[indices[7]])
+    v2 = euclidean_distance(landmarks[indices[2]], landmarks[indices[6]])
+    v3 = euclidean_distance(landmarks[indices[3]], landmarks[indices[5]])
+    h1 = euclidean_distance(landmarks[indices[0]], landmarks[indices[4]])
+    return (v1 + v2 + v3) / (2.0 * h1)
+
+def generate_frames():
+    global system_metrics
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    
+    # --- Blink State Machine ---
+    # eye_closed_frames : consecutive frames where EAR < threshold (eye is closing/closed)
+    # eye_open_frames   : consecutive frames where EAR >= threshold (eye is open)
+    # blink_pending     : True when eye has closed long enough — waiting for it to reopen
+    # blink_counter     : total confirmed blinks
+    eye_closed_frames = 0
+    eye_open_frames = 0
+    blink_pending = False
+    blink_counter = 0
+
+    mp_face_mesh = mp.solutions.face_mesh
+    with mp_face_mesh.FaceMesh(
+        max_num_faces=1,
+        refine_landmarks=True,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    ) as face_mesh:
+        
+        while cap.isOpened():
+            success, frame = cap.read()
+            if not success:
+                break
+                
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = face_mesh.process(frame_rgb)
+            
+            if results.multi_face_landmarks:
+                for face_landmarks in results.multi_face_landmarks:
+                    left_ear = calculate_ear(face_landmarks.landmark, LEFT_EYE)
+                    right_ear = calculate_ear(face_landmarks.landmark, RIGHT_EYE)
+                    avg_ear = (left_ear + right_ear) / 2.0
+                    
+                    # --- State Machine Logic ---
+                    if avg_ear < EAR_THRESHOLD:
+                        # Eye is closing / closed
+                        eye_closed_frames += 1
+                        eye_open_frames = 0  # reset open counter while closed
+
+                        # Mark that a valid closure is in progress
+                        if eye_closed_frames >= CONSECUTIVE_FRAMES:
+                            blink_pending = True
+
+                    else:
+                        # Eye is open
+                        eye_open_frames += 1
+                        eye_closed_frames = 0  # reset closed counter while open
+
+                        # Blink completes only when eye reopens AND stays open long enough.
+                        # This debounce (MIN_OPEN_FRAMES_AFTER_BLINK) is the key fix:
+                        # it prevents EAR jitter around the threshold from firing extra counts.
+                        if blink_pending and eye_open_frames >= MIN_OPEN_FRAMES_AFTER_BLINK:
+                            blink_counter += 1
+                            blink_pending = False  # ready for next blink
+
+                    mar = calculate_mar(face_landmarks.landmark, INNER_LIPS)
+                    moe = mar / avg_ear if avg_ear > 0.01 else mar / 0.01
+                    
+                    status = "FOCUS / NORMAL"
+                    if moe > 2.5:
+                        status = "FATIGUE DETECTED"
+                    elif avg_ear < EAR_THRESHOLD:
+                        status = "BLINKING"
+
+                    system_metrics["ear"] = round(avg_ear, 2)
+                    system_metrics["mar"] = round(mar, 2)
+                    system_metrics["moe"] = round(moe, 2)
+                    system_metrics["blinks"] = blink_counter
+                    system_metrics["status"] = status
+            
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            ret, buffer = cv2.imencode('.jpg', gray_frame)
+            frame_bytes = buffer.tobytes()
+            
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+# --- Web Routes (With Auth) ---
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        if request.form['username'] == 'admin' and request.form['password'] == 'admin123':
+            session['logged_in'] = True
+            return redirect(url_for('index'))
+        else:
+            error = "INVALID CREDENTIALS. ACCESS DENIED."
+    return render_template('login.html', error=error)
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login'))
+
+@app.route('/')
+def index():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    return render_template('index.html')
+
+@app.route('/video_feed')
+def video_feed():
+    if not session.get('logged_in'):
+        return "UNAUTHORIZED", 401
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/api/metrics')
+def metrics():
+    if not session.get('logged_in'):
+        return jsonify({"error": "UNAUTHORIZED"}), 401
+    return jsonify(system_metrics)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)

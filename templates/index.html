@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edge-AI Analytics | v8.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #ffffff; color: #000; font-family: ui-monospace, monospace; }
+        .border-heavy { border: 4px solid #000; }
+        .tab-active { background-color: #000; color: #fff; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body class="p-8 max-w-7xl mx-auto" onload="initSystem()">
+
+    <header class="mb-8 border-b-8 border-black pb-4 flex justify-between items-end">
+        <div>
+            <h1 class="text-5xl font-black tracking-tighter uppercase leading-none">COGNITIVE LOAD<br>SYSTEM</h1>
+            <p class="text-sm font-bold uppercase mt-2">Operator: <span class="bg-black text-white px-2 italic">{{ username }}</span></p>
+        </div>
+        <nav class="flex border-heavy">
+            <button onclick="showView('dashboard')" id="tab-dashboard" class="px-4 py-1 text-xs font-bold uppercase border-r-4 border-black tab-active">Monitor</button>
+            <button onclick="showView('history')" id="tab-history" class="px-4 py-1 text-xs font-bold uppercase border-r-4 border-black">History</button>
+            <button onclick="showView('graph')" id="tab-graph" class="px-4 py-1 text-xs font-bold uppercase border-r-4 border-black">Live Analytics</button>
+            <button onclick="showView('profile')" id="tab-profile" class="px-4 py-1 text-xs font-bold uppercase">Profile</button>
+        </nav>
+    </header>
+
+    <main id="view-dashboard">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div class="md:col-span-2 border-heavy p-2 bg-gray-100 relative">
+                <img src="{{ url_for('video_feed') }}" class="w-full h-auto grayscale">
+                <div id="calib-banner" class="hidden absolute top-0 left-0 w-full bg-yellow-400 p-2 text-center font-black uppercase text-xs">CALIBRATING... [<span id="calib-timer">5</span>s]</div>
+                <div class="flex justify-between p-4 bg-white border-t-4 border-black">
+                    <button onclick="runCalibration()" class="bg-black text-white px-6 py-2 font-bold uppercase text-xs">Calibrate</button>
+                    <button id="session-btn" onclick="handleSessionClick()" class="bg-red-600 text-white px-6 py-2 font-bold uppercase text-xs transition-all">End & Save Session</button>
+                </div>
+            </div>
+            <div class="border-heavy p-6 space-y-4">
+                <div class="border-heavy p-4 text-center bg-gray-50"><p class="text-[10px] font-bold uppercase">Blink Count</p><p id="val-blinks" class="text-6xl font-black">0</p></div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="border-heavy p-2 text-center"><p class="text-[10px] font-bold">EAR</p><p id="val-ear" class="text-2xl font-black">0.00</p></div>
+                    <div class="border-heavy p-2 text-center"><p class="text-[10px] font-bold">MOE</p><p id="val-moe" class="text-2xl font-black">0.00</p></div>
+                    <div class="border-heavy p-2 text-center col-span-2"><p class="text-[10px] font-bold uppercase">GSR Raw</p><p id="val-gsr" class="text-3xl font-black">OFFLINE</p></div>
+                </div>
+                <button onclick="toggleMesh()" class="w-full border-heavy py-2 font-black text-[10px] uppercase">Toggle Diagnostic Mesh</button>
+            </div>
+        </div>
+    </main>
+
+    <section id="view-history" class="hidden space-y-8">
+        <div class="border-heavy p-6">
+            <h2 class="text-3xl font-black uppercase mb-6 italic">Database Sessions</h2>
+            <table class="w-full text-left border-4 border-black">
+                <tr class="bg-black text-white uppercase text-[10px] font-bold"><th class="p-3">Session Start</th><th class="p-3">Status</th><th class="p-3">Action</th></tr>
+                <tbody id="history-table" class="font-bold text-sm"></tbody>
+            </table>
+        </div>
+        <div id="drill-down-container" class="hidden border-heavy p-6 bg-gray-50">
+            <div class="flex justify-between mb-4"><p class="font-black uppercase italic">Past Session Drill-Down</p><button onclick="document.getElementById('drill-down-container').classList.add('hidden')" class="text-xs font-bold underline">CLOSE</button></div>
+            <div class="grid grid-cols-1 gap-4">
+                <div class="h-48 border-heavy p-2 bg-white"><canvas id="pastChart1"></canvas></div>
+                <div class="h-48 border-heavy p-2 bg-white"><canvas id="pastChart2"></canvas></div>
+            </div>
+        </div>
+    </section>
+
+    <section id="view-graph" class="hidden border-heavy p-6 space-y-4">
+        <h2 class="text-3xl font-black uppercase italic mb-4 text-center">Live Performance Analytics</h2>
+        <div class="h-64 border-heavy p-4"><canvas id="liveChartEAR"></canvas></div>
+        <div class="h-64 border-heavy p-4 bg-blue-50"><canvas id="liveChartGSR"></canvas></div>
+    </section>
+
+    <section id="view-profile" class="hidden border-heavy p-8 text-center md:text-left">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div class="space-y-6">
+                <h2 class="text-4xl font-black uppercase italic border-b-4 border-black pb-2">User Profile</h2>
+                <p class="font-bold uppercase">Name: <span class="bg-black text-white px-2">{{ username }}</span></p>
+                <p class="font-bold uppercase">ID: 000{{ user_id }}</p>
+                <a href="/logout" class="bg-red-600 text-white px-8 py-3 font-black uppercase block text-center border-4 border-black hover:bg-black transition-all">Secure Logout</a>
+            </div>
+            <div class="bg-gray-100 border-heavy flex items-center justify-center text-8xl font-black">?</div>
+        </div>
+    </section>
+
+    <script>
+        let isRecording = false, liveChart1, liveChart2;
+        let pastChart1, pastChart2;
+        const MAX_POINTS = 50;
+
+        function initSystem() {
+            autoStartRecording();
+            initLiveCharts();
+            setInterval(updateMetrics, 1000);
+        }
+
+        function showView(v) {
+            ['dashboard','history','graph','profile'].forEach(id => {
+                document.getElementById('view-'+id).classList.add('hidden');
+                document.getElementById('tab-'+id).classList.remove('tab-active');
+            });
+            document.getElementById('view-'+v).classList.remove('hidden');
+            document.getElementById('tab-'+v).classList.add('tab-active');
+            if(v === 'history') fetchHistory();
+        }
+
+        // --- NEW SESSION CYCLE LOGIC ---
+        function handleSessionClick() {
+            if(isRecording) {
+                if(confirm("End current session?")) {
+                    fetch('/api/stop_session', {method:'POST'}).then(() => {
+                        isRecording = false;
+                        const btn = document.getElementById('session-btn');
+                        btn.innerText = "START NEW SESSION";
+                        btn.classList.replace('bg-red-600', 'bg-green-600');
+                        document.getElementById('val-blinks').innerText = "0"; // Reset UI
+                        showView('history');
+                    });
+                }
+            } else {
+                fetch('/api/start_session', {method:'POST'}).then(() => {
+                    isRecording = true;
+                    const btn = document.getElementById('session-btn');
+                    btn.innerText = "END & SAVE SESSION";
+                    btn.classList.replace('bg-green-600', 'bg-red-600');
+                    showView('dashboard');
+                });
+            }
+        }
+
+        function autoStartRecording() { isRecording = true; fetch('/api/start_session', {method:'POST'}); }
+
+        // ... [Remaining Chart and Metric logic from v7.5 remains the same] ...
+        function initLiveCharts() {
+            const commonOpt = {maintainAspectRatio:false, animation:false, scales:{x:{display:false}, y:{beginAtZero:true}}};
+            liveChart1 = new Chart(document.getElementById('liveChartEAR'), {
+                type:'line', data: { labels: Array(MAX_POINTS).fill(''), datasets: [
+                    {label:'EAR (Eye Ratio)', data: Array(MAX_POINTS).fill(null), borderColor:'#aaa'},
+                    {label:'MOE (Fatigue)', data: Array(MAX_POINTS).fill(null), borderColor:'#000'}
+                ]}, options: commonOpt
+            });
+            liveChart2 = new Chart(document.getElementById('liveChartGSR'), {
+                type:'line', data: { labels: Array(MAX_POINTS).fill(''), datasets: [
+                    {label:'GSR Stress Level', data: Array(MAX_POINTS).fill(null), borderColor:'#3b82f6', fill:true}
+                ]}, options: commonOpt
+            });
+        }
+
+        function updateMetrics() {
+            fetch('/api/metrics').then(r => r.json()).then(data => {
+                document.getElementById('val-ear').innerText = data.ear;
+                document.getElementById('val-moe').innerText = data.moe;
+                document.getElementById('val-gsr').innerText = data.gsr;
+                document.getElementById('val-blinks').innerText = data.blinks;
+                if(liveChart1 && liveChart2) {
+                    liveChart1.data.datasets[0].data.shift(); liveChart1.data.datasets[0].data.push(data.ear);
+                    liveChart1.data.datasets[1].data.shift(); liveChart1.data.datasets[1].data.push(data.moe);
+                    liveChart2.data.datasets[0].data.shift(); liveChart2.data.datasets[0].data.push(data.gsr);
+                    liveChart1.update(); liveChart2.update();
+                }
+                if(isRecording) fetch('/api/log_telemetry', {method:'POST'});
+            });
+        }
+
+        function fetchHistory() {
+            fetch('/api/history').then(r => r.json()).then(data => {
+                const h = document.getElementById('history-table'); h.innerHTML = '';
+                data.forEach(s => {
+                    h.innerHTML += `<tr class="border-b-4 border-black">
+                        <td class="p-3">${s.timestamp}</td><td class="p-3 uppercase text-xs">${s.final_status}</td>
+                        <td class="p-3"><button onclick="loadPastGraph(${s.id})" class="underline uppercase text-[10px] font-black">View Drill-Down</button></td></tr>`;
+                });
+            });
+        }
+
+        function loadPastGraph(sid) {
+            document.getElementById('drill-down-container').classList.remove('hidden');
+            fetch('/api/session_graph/'+sid).then(r => r.json()).then(data => {
+                const labels = data.map(d => d.time_offset + "s");
+                if(pastChart1) pastChart1.destroy(); if(pastChart2) pastChart2.destroy();
+                pastChart1 = new Chart(document.getElementById('pastChart1'), { type:'line', data: { labels, datasets: [{label:'EAR History', data: data.map(d=>d.ear), borderColor:'#000'}]}, options: {maintainAspectRatio:false}});
+                pastChart2 = new Chart(document.getElementById('pastChart2'), { type:'line', data: { labels, datasets: [{label:'GSR History', data: data.map(d=>d.gsr), borderColor:'#3b82f6', fill:true}]}, options: {maintainAspectRatio:false}});
+            });
+        }
+
+        function runCalibration() {
+            const banner = document.getElementById('calib-banner'); const timerDisplay = document.getElementById('calib-timer');
+            banner.classList.remove('hidden'); let samples = [], timeLeft = 5;
+            const interval = setInterval(() => {
+                fetch('/api/metrics').then(r=>r.json()).then(d => samples.push(d.ear));
+                timeLeft--; timerDisplay.innerText = timeLeft;
+                if(timeLeft <= 0) {
+                    clearInterval(interval); const avg = samples.reduce((a,b)=>a+b,0)/samples.length;
+                    fetch('/api/calibrate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({threshold:avg*0.7})});
+                    banner.classList.add('hidden'); alert("Personal Baseline Configured!");
+                }
+            }, 1000);
+        }
+        function toggleMesh() { window.isMeshVisible = !window.isMeshVisible; fetch('/api/toggle_mesh', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({show_mesh:window.isMeshVisible})}); }
+    </script>
+</body>
+</html>

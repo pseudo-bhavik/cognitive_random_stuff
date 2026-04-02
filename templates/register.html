@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PBL | System Registration</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            background-color: #ffffff; color: #000000; 
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+        .border-heavy { border: 8px solid #000; }
+        .input-heavy { border: 4px solid #000; padding: 12px; font-weight: bold; width: 100%; outline: none; }
+        .input-heavy:focus { background-color: #000; color: #fff; }
+        .btn-heavy { background-color: #000; color: #fff; padding: 16px; font-weight: 900; text-transform: uppercase; width: 100%; transition: 0.2s; }
+        .btn-heavy:hover { background-color: #fff; color: #000; border: 4px solid #000; }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <div class="max-w-md w-full border-heavy p-8">
+        <header class="mb-8 border-b-4 border-black pb-4">
+            <h1 class="text-4xl font-black tracking-tighter uppercase leading-none italic">NEW USER<br>ENROLLMENT</h1>
+            <p class="text-[10px] font-bold uppercase mt-2">Initialize Cognitive Baseline Database</p>
+        </header>
+
+        {% if error %}
+        <div class="bg-black text-white p-3 mb-6 text-xs font-bold uppercase tracking-widest text-center">
+            ERROR: {{ error }}
+        </div>
+        {% endif %}
+
+        <form action="/register" method="POST" class="space-y-6">
+            <div>
+                <label class="text-xs font-black uppercase tracking-widest block mb-2">Assign Username</label>
+                <input type="text" name="username" class="input-heavy" placeholder="E.G. ADMIN_01" required>
+            </div>
+
+            <div>
+                <label class="text-xs font-black uppercase tracking-widest block mb-2">Assign Secure Key</label>
+                <input type="password" name="password" class="input-heavy" placeholder="********" required>
+            </div>
+
+            <button type="submit" class="btn-heavy">Initialize Profile</button>
+        </form>
+
+        <footer class="mt-8 pt-4 border-t-2 border-black flex justify-between items-center">
+            <span class="text-[10px] font-bold uppercase">System v3.0</span>
+            <a href="/login" class="text-xs font-bold uppercase underline hover:bg-black hover:text-white px-2 py-1">Return to Login</a>
+        </footer>
+    </div>
+
+</body>
+</html>

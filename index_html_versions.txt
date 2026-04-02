@@ -1,0 +1,228 @@
+V1 current working 
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PBL Dashboard | Cognitive Load</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { 
+            background-color: #ffffff; color: #000000; 
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+        .border-heavy { border: 4px solid #000; }
+        .border-light { border-bottom: 2px solid #000; }
+        .bg-black-text-white { background-color: #000; color: #fff; }
+    </style>
+</head>
+<body class="p-8 max-w-7xl mx-auto">
+
+    <header class="mb-12 border-b-8 border-black pb-4 flex justify-between items-end">
+        <div>
+            <h1 class="text-5xl font-black tracking-tighter uppercase leading-none">COGNITIVE LOAD<br>DASHBOARD</h1>
+            <p class="text-sm font-bold uppercase mt-2">PBL Phase 1: Edge Vision Active</p>
+        </div>
+        <div class="flex flex-col items-end space-y-2">
+            <div id="status-indicator" class="px-4 py-2 bg-black-text-white font-bold text-xl uppercase tracking-widest text-center min-w-[200px]">
+                INITIALIZING...
+            </div>
+            <div class="flex space-x-4 mt-2">
+                <button id="mesh-toggle-btn" onclick="toggleMesh()" class="border-heavy px-4 py-1 text-xs font-bold uppercase hover:bg-black hover:text-white transition-colors">
+                    DIAGNOSTIC OVERLAY: OFF
+                </button>
+                <a href="/logout" class="text-xs font-bold uppercase underline hover:bg-black hover:text-white px-2 py-1 transition-colors">Terminate Session</a>
+            </div>
+        </div>
+    </header>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+        
+        <div class="md:col-span-2 border-heavy p-2 bg-gray-100 flex items-center justify-center min-h-[400px]">
+            <img src="{{ url_for('video_feed') }}" alt="Webcam Feed" class="w-full h-auto object-cover grayscale">
+        </div>
+
+        <div class="border-heavy p-6 flex flex-col justify-between">
+            <div>
+                <h2 class="text-2xl font-black uppercase mb-6 border-light pb-2">Vision Metrics</h2>
+                
+                <div class="mb-4">
+                    <p class="text-xs font-bold text-gray-500 uppercase tracking-widest">Eye Aspect Ratio (EAR)</p>
+                    <p class="text-4xl font-black" id="val-ear">0.00</p>
+                </div>
+                
+                <div class="mb-4">
+                    <p class="text-xs font-bold text-gray-500 uppercase tracking-widest">Mouth Aspect Ratio (MAR)</p>
+                    <p class="text-4xl font-black" id="val-mar">0.00</p>
+                </div>
+                
+                <div class="mb-4">
+                    <p class="text-xs font-bold text-gray-500 uppercase tracking-widest">Mouth Over Eye (MOE)</p>
+                    <p class="text-4xl font-black" id="val-moe">0.00</p>
+                </div>
+
+                <div class="mb-8">
+                    <p class="text-xs font-bold text-gray-500 uppercase tracking-widest">Total Blinks</p>
+                    <p class="text-4xl font-black" id="val-blinks">0</p>
+                </div>
+            </div>
+
+            <div>
+                <h2 class="text-2xl font-black uppercase mb-4 border-light pb-2">Hardware (ESP32)</h2>
+                <div class="flex justify-between items-center mb-2">
+                    <span class="font-bold uppercase">GSR Sensor:</span>
+                    <span id="val-gsr" class="bg-black text-white px-2 py-1 text-xs font-bold transition-all">OFFLINE</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="font-bold uppercase">ECG HRV:</span>
+                    <span class="bg-black text-white px-2 py-1 text-xs font-bold">OFFLINE</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="md:col-span-3 border-heavy p-6 mt-4">
+            <div class="flex justify-between items-center mb-4 border-light pb-2">
+                <h2 class="text-2xl font-black uppercase">Live Telemetry</h2>
+                <span class="text-xs font-bold bg-black text-white px-2 py-1 uppercase">1 SEC POLLING</span>
+            </div>
+            <div class="relative h-64 w-full">
+                <canvas id="telemetryChart"></canvas>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- POINTS TOGGLE LOGIC ---
+        let isMeshVisible = false;
+
+        function toggleMesh() {
+            isMeshVisible = !isMeshVisible;
+            const btn = document.getElementById('mesh-toggle-btn');
+            
+            if(isMeshVisible) {
+                btn.innerText = "DIAGNOSTIC OVERLAY: ON";
+                btn.classList.add('bg-black', 'text-white');
+            } else {
+                btn.innerText = "DIAGNOSTIC OVERLAY: OFF";
+                btn.classList.remove('bg-black', 'text-white');
+            }
+
+            fetch('/api/toggle_mesh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ show_mesh: isMeshVisible })
+            }).catch(err => console.error("Toggle Error:", err));
+        }
+
+        // --- CHART & METRICS LOGIC ---
+        const ctx = document.getElementById('telemetryChart').getContext('2d');
+        const MAX_DATA_POINTS = 50; 
+
+        const telemetryChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(MAX_DATA_POINTS).fill(''), 
+                datasets: [
+                    {
+                        label: 'MOE (Fatigue Ratio)',
+                        data: Array(MAX_DATA_POINTS).fill(null),
+                        borderColor: '#000000',
+                        borderWidth: 3,
+                        pointRadius: 0,
+                        tension: 0.1,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'EAR (Focus Drop)',
+                        data: Array(MAX_DATA_POINTS).fill(null),
+                        borderColor: '#aaaaaa',
+                        borderDash: [5, 5],
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.1,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false, 
+                plugins: {
+                    legend: { labels: { color: '#000', font: { family: 'ui-monospace, monospace', weight: 'bold' } } }
+                },
+                scales: {
+                    x: { display: false }, 
+                    y: { 
+                        type: 'linear', display: true, position: 'left',
+                        grid: { color: '#e5e5e5' },
+                        ticks: { color: '#000', font: { family: 'ui-monospace, monospace' } },
+                        title: { display: true, text: 'MOE', font: { weight: 'bold' } }
+                    },
+                    y1: {
+                        type: 'linear', display: true, position: 'right',
+                        grid: { drawOnChartArea: false },
+                        ticks: { color: '#aaaaaa', font: { family: 'ui-monospace, monospace' } },
+                        title: { display: true, text: 'EAR', color: '#aaaaaa', font: { weight: 'bold' } }
+                    }
+                }
+            }
+        });
+
+        function updateMetrics() {
+            fetch('/api/metrics')
+                .then(response => {
+                    if (response.status === 401) {
+                        window.location.href = '/login';
+                        throw new Error('Unauthorized');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // Update Vision Text
+                    document.getElementById('val-ear').innerText = data.ear.toFixed(2);
+                    document.getElementById('val-mar').innerText = data.mar.toFixed(2);
+                    document.getElementById('val-moe').innerText = data.moe.toFixed(2);
+                    document.getElementById('val-blinks').innerText = data.blinks;
+                    
+                    // Update Status Badge
+                    const statusEl = document.getElementById('status-indicator');
+                    statusEl.innerText = data.status;
+                    if(data.status.includes("FATIGUE")) {
+                        statusEl.style.backgroundColor = "#fff";
+                        statusEl.style.color = "#000";
+                        statusEl.style.border = "4px solid #000";
+                    } else {
+                        statusEl.style.backgroundColor = "#000";
+                        statusEl.style.color = "#fff";
+                        statusEl.style.border = "none";
+                    }
+
+                    // --- NEW: DYNAMIC HARDWARE UPDATE ---
+                    const gsrEl = document.getElementById('val-gsr');
+                    if (data.gsr !== "OFFLINE") {
+                        gsrEl.innerText = data.gsr + " RAW";
+                        gsrEl.classList.remove('bg-black', 'text-white');
+                        gsrEl.classList.add('border-heavy', 'bg-white', 'text-black', 'px-3');
+                    }
+
+                    // Update Chart Data
+                    const chartData = telemetryChart.data.datasets;
+                    chartData[0].data.shift();
+                    chartData[0].data.push(data.moe);
+                    
+                    chartData[1].data.shift();
+                    chartData[1].data.push(data.ear);
+                    
+                    telemetryChart.update();
+                })
+                .catch(err => console.error("Data polling error:", err));
+        }
+
+        setInterval(updateMetrics, 1000);
+    </script>
+</body>
+</html>
